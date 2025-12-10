@@ -50,6 +50,7 @@ class SeoulDataClient:
             requests.exceptions.RequestException: HTTP 에러
             TimeoutError: 타임아웃 발생
         """
+        # 서울 열린데이터 API는 인증키를 URL 경로에 포함
         url = f"{self.BASE_URL}/{self.api_key}{endpoint}"
         
         try:
@@ -60,8 +61,18 @@ class SeoulDataClient:
             if not response.content:
                 raise ValueError("API 응답이 비어있습니다.")
             
+            # Content-Type 확인
+            content_type = response.headers.get('Content-Type', '').lower()
+            
             # JSON 응답 파싱
-            data = response.json()
+            if 'json' in content_type:
+                data = response.json()
+            else:
+                # JSON이 아닌 경우 텍스트로 시도
+                try:
+                    data = response.json()
+                except:
+                    raise ValueError(f"JSON 형식이 아닌 응답입니다. Content-Type: {content_type}")
             
             # 서울 열린데이터는 에러를 JSON으로 반환하는 경우가 있음
             if isinstance(data, dict) and "RESULT" in data:
@@ -110,11 +121,9 @@ class SeoulDataClient:
         Returns:
             실시간 주차 정보
         """
-        endpoint = "/json/GetParkingInfo"
-        params = {
-            "START_INDEX": start_index,
-            "END_INDEX": end_index,
-        }
+        # 서울 열린데이터 API 형식: /{인증키}/json/서비스명/시작인덱스/종료인덱스
+        endpoint = f"/json/GetParkingInfo/{start_index}/{end_index}"
+        params = {}
         
         return self._make_request(endpoint, params)
     
@@ -145,4 +154,5 @@ class SeoulDataClient:
             params["PARKING_CODE"] = parking_code
         
         return self._make_request(endpoint, params)
+
 

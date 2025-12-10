@@ -2,12 +2,11 @@
 주차장 정보 조회 MCP 서버
 """
 
-import xml.etree.ElementTree as ET
 from typing import List, Dict, Optional, Any
 from fastmcp import FastMCP
 
 from .api_clients import (
-    PublicDataClient,
+    KakaoLocalClient,
     SeoulDataClient,
     GyeonggiDataClient,
 )
@@ -60,19 +59,26 @@ def _format_parking_info(
     }
     
     if region in ["seoul", "gyeonggi"] and realtime_info:
-        # 실시간 정보가 있는 경우
+        # 서울/경기 지역 정보 추가
         result["available_spots"] = realtime_info.get(
             "available_spots",
             realtime_info.get("available", None)
         )
+        result["total_spots"] = realtime_info.get("total_spots") or result.get("total_spots")
+        
+        # 운영정보와 요금 정보 추가 (서울/경기 모두)
+        if realtime_info.get("operating_info"):
+            result["operating_info"] = realtime_info.get("operating_info")
+        if realtime_info.get("fee_info"):
+            result["fee_info"] = realtime_info.get("fee_info")
+        
+        # 서울은 실시간 정보, 경기는 요금/운영시간만
+        if region == "seoul":
+            result["update_time"] = realtime_info.get("update_time")
     else:
         # 실시간 정보가 없는 경우
         result["available_spots"] = None
-        if region == "other":
-            result["notice"] = (
-                "해당 지역은 기본 주차장 정보만 제공됩니다. "
-                "실시간 정보는 서울/경기 지역에서 이용 가능합니다."
-            )
+        # notice는 각 주차장에 추가하지 않고, 최상단에 한 번만 표시
     
     return result
 
@@ -84,21 +90,62 @@ def _get_realtime_info_seoul(
     """서울 주차장 실시간 정보 조회"""
     try:
         seoul_client = SeoulDataClient()
-        response = seoul_client.get_realtime_parking_info()
+        # 서울 API는 최대 1000개까지 한 번에 조회 가능
+        response = seoul_client.get_realtime_parking_info(
+            start_index=1,
+            end_index=1000
+        )
         
         if response.get("status") == "success":
             data = response.get("data", {})
-            # 실제 API 응답 구조에 맞게 파싱 필요
-            # 여기서는 예시로 구현
-            parking_list = data.get("GetParkingInfo", {}).get("row", [])
+            parking_info = data.get("GetParkingInfo", {})
+            parking_list = parking_info.get("row", [])
             
-            # 주차장 이름이나 주소로 매칭
+            # 주차장 이름이나 주소로 매칭 (부분 일치)
             for parking in parking_list:
-                if (parking_name in parking.get("PARKING_NAME", "") or
-                    address in parking.get("ADDR", "")):
+                parking_nm = parking.get("PKLT_NM", "")
+                parking_addr = parking.get("ADDR", "")
+                
+                # 이름이나 주소가 부분적으로 일치하는지 확인
+                name_match = parking_name and (parking_name in parking_nm or parking_nm in parking_name)
+                addr_match = address and (address in parking_addr or parking_addr in address)
+                
+                if name_match or addr_match:
+                    total_spots = parking.get("TPKCT", 0)
+                    current_spots = parking.get("NOW_PRK_VHCL_CNT", 0)
+                    available_spots = max(0, float(total_spots) - float(current_spots))
+                    
+                    # 운영 정보
+                    operating_info = {
+                        "operating_type": parking.get("OPER_SE_NM", ""),
+                        "status": parking.get("PRK_STTS_NM", ""),
+                        "weekday_start": parking.get("WD_OPER_BGNG_TM", ""),
+                        "weekday_end": parking.get("WD_OPER_END_TM", ""),
+                        "weekend_start": parking.get("WE_OPER_BGNG_TM", ""),
+                        "weekend_end": parking.get("WE_OPER_END_TM", ""),
+                        "holiday_start": parking.get("LHLDY_OPER_BGNG_TM", ""),
+                        "holiday_end": parking.get("LHLDY_OPER_END_TM", ""),
+                    }
+                    
+                    # 요금 정보
+                    fee_info = {
+                        "is_paid": parking.get("PAY_YN_NM", ""),
+                        "night_paid": parking.get("NGHT_PAY_YN_NM", ""),
+                        "basic_fee": parking.get("BSC_PRK_CRG", 0),
+                        "basic_hours": parking.get("BSC_PRK_HR", 0),
+                        "additional_fee": parking.get("ADD_PRK_CRG", 0),
+                        "additional_hours": parking.get("ADD_PRK_HR", 0),
+                        "daily_max_fee": parking.get("DAY_MAX_CRG", 0),
+                        "period_fee": parking.get("PRD_AMT", 0),
+                    }
+                    
                     return {
-                        "available_spots": parking.get("CAPACITY", 0) - parking.get("CUR_PARKING", 0),
-                        "total_spots": parking.get("CAPACITY", 0),
+                        "available_spots": int(available_spots),
+                        "total_spots": int(total_spots),
+                        "current_spots": int(current_spots),
+                        "update_time": parking.get("NOW_PRK_VHCL_UPDT_TM", ""),
+                        "operating_info": operating_info,
+                        "fee_info": fee_info,
                     }
     except ValueError:
         # API 키 없음 등 - 조용히 실패
@@ -114,23 +161,68 @@ def _get_realtime_info_gyeonggi(
     parking_name: str,
     address: str
 ) -> Optional[Dict[str, Any]]:
-    """경기 주차장 실시간 정보 조회"""
+    """경기 주차장 정보 조회 (요금 및 운영시간 포함)"""
     try:
         gyeonggi_client = GyeonggiDataClient()
-        response = gyeonggi_client.get_realtime_parking_info()
+        response = gyeonggi_client.get_realtime_parking_info(
+            page=1,
+            size=100
+        )
         
         if response.get("status") == "success":
             data = response.get("data", {})
-            # 실제 API 응답 구조에 맞게 파싱 필요
-            parking_list = data.get("Parking", [1], {}).get("row", [])
+            parking_place = data.get("ParkingPlace", [])
+            
+            # 경기 API 응답 구조: ParkingPlace는 배열이고 [1]에 row가 있음
+            if isinstance(parking_place, list) and len(parking_place) > 1:
+                parking_list = parking_place[1].get("row", [])
+            elif isinstance(parking_place, dict):
+                parking_list = parking_place.get("row", [])
+            else:
+                parking_list = []
             
             # 주차장 이름이나 주소로 매칭
             for parking in parking_list:
-                if (parking_name in parking.get("PARKING_NAME", "") or
-                    address in parking.get("ADDR", "")):
+                parking_nm = parking.get("PARKPLC_NM", "") or parking.get("parkplc_nm", "")
+                parking_addr = (
+                    parking.get("LOCPLC_ROADNM_ADDR", "") or 
+                    parking.get("LOCPLC_LOTNO_ADDR", "") or
+                    parking.get("locplc_roadnm_addr", "") or
+                    parking.get("locplc_lotno_addr", "")
+                )
+                
+                # 이름이나 주소가 부분적으로 일치하는지 확인
+                name_match = parking_name and (parking_name in parking_nm or parking_nm in parking_name)
+                addr_match = address and (address in parking_addr or parking_addr in address)
+                
+                if name_match or addr_match:
+                    total_spots = parking.get("PARKNG_COMPRT_PLANE_CNT", 0) or parking.get("parkng_comprt_plane_cnt", 0)
+                    
+                    # 운영 정보
+                    operating_info = {
+                        "weekday_start": parking.get("WKDAY_OPERT_BEGIN_TM", ""),
+                        "weekday_end": parking.get("WKDAY_OPERT_END_TM", ""),
+                        "saturday_start": parking.get("SAT_OPERT_BEGIN_TM", ""),
+                        "saturday_end": parking.get("SAT_OPERT_END_TM", ""),
+                        "holiday_start": parking.get("HOLIDAY_OPERT_BEGIN_TM", ""),
+                        "holiday_end": parking.get("HOLIDAY_OPERT_END_TM", ""),
+                    }
+                    
+                    # 요금 정보
+                    fee_info = {
+                        "is_paid": parking.get("CHRG_INFO", ""),  # 유료/무료
+                        "basic_time": parking.get("PARKNG_BASIS_TM", 0),  # 기본 시간 (분)
+                        "basic_fee": parking.get("PARKNG_BASIS_USE_CHRG", 0),  # 기본 요금
+                        "additional_time": parking.get("ADD_UNIT_TM", 0),  # 추가 시간 (분)
+                        "additional_fee": parking.get("ADD_UNIT_TM2_WITHIN_USE_CHRG", 0),  # 추가 요금
+                        "payment_method": parking.get("SETTLE_METH", ""),  # 결제 방법
+                    }
+                    
                     return {
-                        "available_spots": parking.get("CAPACITY", 0) - parking.get("CUR_PARKING", 0),
-                        "total_spots": parking.get("CAPACITY", 0),
+                        "total_spots": int(total_spots) if total_spots else None,
+                        "available_spots": None,  # 경기 API에는 실시간 주차 대수 정보가 없음
+                        "operating_info": operating_info,
+                        "fee_info": fee_info,
                     }
     except ValueError:
         # API 키 없음 등 - 조용히 실패
@@ -142,74 +234,34 @@ def _get_realtime_info_gyeonggi(
     return None
 
 
-def _parse_xml_response(xml_string: str) -> List[Dict[str, Any]]:
+def _parse_kakao_parking_response(kakao_data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    공공데이터포털 XML 응답을 파싱하여 주차장 목록 반환
+    카카오 API 응답을 파싱하여 주차장 목록 반환
     
     Args:
-        xml_string: XML 응답 문자열
+        kakao_data: 카카오 API 응답 데이터
     
     Returns:
         주차장 정보 딕셔너리 리스트
     """
-    try:
-        root = ET.fromstring(xml_string)
-        
-        # 공공데이터포털 응답 구조에 따라 파싱
-        # 일반적인 구조: response -> body -> items -> item
-        items = root.findall(".//item")
-        
-        parking_list = []
-        for item in items:
-            parking = {}
-            for child in item:
-                # XML 태그명을 키로, 텍스트를 값으로
-                tag = child.tag.replace("{http://www.data.go.kr/}", "")
-                parking[tag] = child.text if child.text else ""
-            
-            # 필드명 정규화 (다양한 API 응답 형식 대응)
-            if parking:
-                # 주차장명
-                parking["name"] = (
-                    parking.get("parkingName") or
-                    parking.get("parking_name") or
-                    parking.get("PARKING_NAME") or
-                    parking.get("name") or
-                    ""
-                )
-                # 주소
-                parking["address"] = (
-                    parking.get("addr") or
-                    parking.get("address") or
-                    parking.get("ADDR") or
-                    parking.get("addrNew") or
-                    ""
-                )
-                # 총 주차 대수
-                parking["total_spots"] = (
-                    parking.get("capacity") or
-                    parking.get("CAPACITY") or
-                    parking.get("totalSpots") or
-                    None
-                )
-                # 요금
-                parking["fee"] = (
-                    parking.get("rates") or
-                    parking.get("RATES") or
-                    parking.get("fee") or
-                    parking.get("payNm") or
-                    ""
-                )
-                
-                parking_list.append(parking)
-        
-        return parking_list
-    except ET.ParseError:
-        # XML 파싱 실패
-        return []
-    except Exception:
-        # 기타 에러
-        return []
+    parking_list = []
+    documents = kakao_data.get("documents", [])
+    
+    for doc in documents:
+        parking = {
+            "name": doc.get("place_name", ""),
+            "address": doc.get("address_name", ""),
+            "road_address": doc.get("road_address_name", ""),
+            "distance": doc.get("distance", 0),
+            "phone": doc.get("phone", ""),
+            "category": doc.get("category_name", ""),
+            "latitude": doc.get("y"),
+            "longitude": doc.get("x"),
+            "place_url": doc.get("place_url", ""),
+        }
+        parking_list.append(parking)
+    
+    return parking_list
 
 
 @app.tool()
@@ -248,13 +300,14 @@ def search_nearby_parking(
             "parkings": []
         }
     
-    # 기본 주차장 정보 검색
+    # 카카오 API로 주차장 검색
     try:
-        public_client = PublicDataClient()
-        response = public_client.search_nearby_parking(
+        kakao_client = KakaoLocalClient()
+        response = kakao_client.search_parking_nearby(
             latitude=latitude,
             longitude=longitude,
-            radius=radius
+            radius=int(radius),
+            size=15
         )
     except ValueError as e:
         # API 키 없음
@@ -280,9 +333,9 @@ def search_nearby_parking(
             "parkings": []
         }
     
-    # XML 응답 파싱
-    raw_data = response.get("data", "")
-    parking_list = _parse_xml_response(raw_data)
+    # 카카오 API 응답 파싱
+    kakao_data = response.get("data", {})
+    parking_list = _parse_kakao_parking_response(kakao_data)
     
     # 결과가 없는 경우
     if not parking_list:
@@ -293,9 +346,15 @@ def search_nearby_parking(
     
     # 각 주차장에 대해 실시간 정보 추가
     formatted_parkings = []
+    has_other_region = False  # 기타 지역 주차장이 있는지 확인
+    
     for parking in parking_list:
-        address = parking.get("address", parking.get("addr", ""))
+        address = parking.get("address", "") or parking.get("road_address", "")
         region = _get_region(address)
+        
+        # 기타 지역이 있는지 확인
+        if region == "other":
+            has_other_region = True
         
         realtime_info = None
         if region == "seoul":
@@ -309,13 +368,33 @@ def search_nearby_parking(
                 address
             )
         
-        formatted_parking = _format_parking_info(parking, region, realtime_info)
+        # 카카오 API 데이터를 표준 형식으로 변환
+        standard_parking = {
+            "name": parking.get("name", ""),
+            "address": address,
+            "total_spots": None,  # 카카오 API에는 총 주차 대수 정보가 없음
+            "fee": parking.get("category", ""),
+            "distance": parking.get("distance", 0),
+            "phone": parking.get("phone", ""),
+        }
+        
+        formatted_parking = _format_parking_info(standard_parking, region, realtime_info)
         formatted_parkings.append(formatted_parking)
     
-    return {
+    # 응답 구성
+    response = {
         "parkings": formatted_parkings,
         "count": len(formatted_parkings)
     }
+    
+    # 기타 지역이 있는 경우 최상단에 안내 메시지 추가
+    if has_other_region:
+        response["notice"] = (
+            "해당 지역은 기본 주차장 정보만 제공됩니다. "
+            "실시간 정보는 서울 지역에서, 요금 및 운영시간 정보는 서울/경기 지역에서 이용 가능합니다."
+        )
+    
+    return response
 
 
 @app.tool()
@@ -337,12 +416,16 @@ def get_parking_info(
             "error": "유효하지 않은 주차장 정보입니다. 확인 후 다시 시도해주세요."
         }
     
-    # 기본 주차장 정보 조회
+    # 카카오 API로 주차장 검색 (장소 ID로 검색)
     try:
-        public_client = PublicDataClient()
-        # 실제 API에 주차장 ID로 조회하는 엔드포인트가 있다고 가정
-        # 여기서는 예시로 구현
-        response = public_client.get_parking_list()
+        kakao_client = KakaoLocalClient()
+        # 카카오 API는 장소 ID로 검색하는 기능이 제한적이므로
+        # 주차장 이름으로 검색 시도
+        response = kakao_client.search_place(
+            query=parking_id,
+            category_group_code="PK6",  # 주차장 카테고리
+            size=10
+        )
     except ValueError as e:
         # API 키 없음
         if "설정되지 않았습니다" in str(e) or "유효하지 않습니다" in str(e):
@@ -363,17 +446,16 @@ def get_parking_info(
             "error": "주차장 정보를 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
         }
     
-    # XML 응답 파싱
-    raw_data = response.get("data", "")
-    parking_list = _parse_xml_response(raw_data)
+    # 카카오 API 응답 파싱
+    kakao_data = response.get("data", {})
+    parking_list = _parse_kakao_parking_response(kakao_data)
     
-    # 해당 ID의 주차장 찾기
+    # 해당 ID와 일치하는 주차장 찾기 (이름이나 주소로 매칭)
     parking = None
     for p in parking_list:
-        if (p.get("id") == parking_id or 
-            p.get("parking_id") == parking_id or
-            p.get("parkingId") == parking_id or
-            p.get("PARKING_ID") == parking_id):
+        if (parking_id in p.get("name", "") or 
+            parking_id in p.get("address", "") or
+            parking_id in p.get("road_address", "")):
             parking = p
             break
     
@@ -383,7 +465,7 @@ def get_parking_info(
         }
     
     # 지역 구분 및 실시간 정보 추가
-    address = parking.get("address", parking.get("addr", ""))
+    address = parking.get("address", "") or parking.get("road_address", "")
     region = _get_region(address)
     
     realtime_info = None
@@ -398,7 +480,17 @@ def get_parking_info(
             address
         )
     
-    formatted_parking = _format_parking_info(parking, region, realtime_info)
+    # 카카오 API 데이터를 표준 형식으로 변환
+    standard_parking = {
+        "name": parking.get("name", ""),
+        "address": address,
+        "total_spots": None,
+        "fee": parking.get("category", ""),
+        "distance": parking.get("distance", 0),
+        "phone": parking.get("phone", ""),
+    }
+    
+    formatted_parking = _format_parking_info(standard_parking, region, realtime_info)
     
     return formatted_parking
 

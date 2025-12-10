@@ -200,3 +200,4 @@ class KakaoLocalClient:
             size=size
         )
 
+

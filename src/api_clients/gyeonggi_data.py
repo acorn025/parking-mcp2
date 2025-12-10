@@ -104,16 +104,16 @@ class GyeonggiDataClient:
         size: int = 100
     ) -> Dict:
         """
-        경기도 실시간 주차 정보 조회
+        경기도 주차장 정보 조회 (요금 및 운영시간 포함)
         
         Args:
             page: 페이지 번호
             size: 페이지당 결과 수
         
         Returns:
-            실시간 주차 정보
+            주차장 정보 (요금 및 운영시간 포함)
         """
-        endpoint = "/Parking"
+        endpoint = "/ParkingPlace"
         params = {
             "Type": "json",
             "pIndex": page,
@@ -150,4 +150,5 @@ class GyeonggiDataClient:
             params["PARKING_ID"] = parking_id
         
         return self._make_request(endpoint, params)
+
 

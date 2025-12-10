@@ -52,18 +52,70 @@ copy .env.example .env
 
 ```
 parking-mcp2/
-├── venv/                 # 가상환경 (gitignore됨)
-├── .env                  # 환경 변수 (gitignore됨)
-├── .env.example          # 환경 변수 예시
+├── venv/                      # 가상환경 (gitignore됨)
+├── .env                       # 환경 변수 (gitignore됨)
+├── .env.example               # 환경 변수 예시
 ├── .gitignore
-├── requirements.txt      # Python 의존성
+├── requirements.txt           # Python 의존성
 ├── README.md
-└── src/                  # 소스 코드 (추가 예정)
+├── test_api.py                # API 클라이언트 테스트
+├── test_api_call.py           # 실제 API 호출 테스트
+├── test_server.py             # 서버 구조 테스트
+└── src/                       # 소스 코드
+    ├── __init__.py
+    ├── server.py              # MCP 서버 메인 파일
+    └── api_clients/           # API 클라이언트 모듈
+        ├── __init__.py
+        ├── kakao_local.py     # 카카오 로컬 API (주요 검색 API)
+        ├── seoul_data.py      # 서울 열린데이터 (서울 실시간 정보)
+        └── gyeonggi_data.py   # 경기데이터드림 (경기 실시간 정보)
 ```
 
 ## 사용 방법
 
-개발 환경 설정이 완료되면 MCP 서버 코드를 작성할 수 있습니다.
+### 서버 실행
+
+```powershell
+# 가상환경 활성화
+.\venv\Scripts\Activate.ps1
+
+# 서버 실행 (모듈로 실행)
+$env:PYTHONPATH="src"; python -m src.server
+```
+
+### 테스트
+
+```powershell
+# API 클라이언트 초기화 테스트
+python test_api.py
+
+# 실제 API 호출 테스트 (카카오 API)
+python test_api_call.py
+
+# 서버 구조 테스트
+python test_server.py
+```
+
+## 주요 기능
+
+### 제공하는 Tool 함수
+
+1. **search_nearby_parking**
+   - 주변 주차장 검색 (카카오 로컬 API 사용)
+   - 좌표 기반 검색 (위도, 경도, 반경)
+   - 서울/경기 지역은 실시간 주차 가능 대수 추가 제공
+   - 기타 지역은 기본 주차장 정보 제공
+
+2. **get_parking_info**
+   - 특정 주차장 상세 정보 조회
+   - 주차장 ID로 조회
+   - 지역별 실시간 정보 자동 추가
+
+### 지원하는 API
+
+- **카카오 로컬 API**: 전국 주차장 검색 및 주소 변환 (주요 검색 API)
+- **서울 열린데이터**: 서울시 실시간 주차 정보 (서울 지역 실시간 정보 추가)
+- **경기데이터드림**: 경기도 실시간 주차 정보 (경기 지역 실시간 정보 추가)
 
 ## 의존성
 
