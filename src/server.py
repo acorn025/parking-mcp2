@@ -5,7 +5,7 @@
 from typing import List, Dict, Optional, Any
 from fastmcp import FastMCP
 
-from .api_clients import (
+from src.api_clients import (
     KakaoLocalClient,
     SeoulDataClient,
     GyeonggiDataClient,
@@ -495,6 +495,11 @@ def get_parking_info(
     return formatted_parking
 
 
-if __name__ == "__main__":
+def main():
+    """MCP 서버 실행 함수 (entry point용)"""
     app.run()
+
+
+if __name__ == "__main__":
+    main()
 
