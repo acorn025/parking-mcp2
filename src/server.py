@@ -328,9 +328,37 @@ def search_nearby_parking(
     if address:
         lat, lng = _address_to_coordinates(address)
         if lat is None or lng is None:
+            # 지역 확인을 위해 주소에서 추출 시도
+            region = _get_region(address)
+            
+            # 지역별 안내 메시지
+            if region == "other":
+                message = (
+                    f"주소 '{address}'를 찾을 수 없습니다.\n\n"
+                    "인천 지역은 서울/경기 지역이 아니어서 실시간 주차 가능 대수 정보를 제공할 수 없습니다.\n\n"
+                    "근처 주차장을 검색해드릴까요? 더 구체적인 주소(예: \"인천광역시 남동구...\")를 알려주시면 "
+                    "근처 주차장 위치와 기본 정보를 찾아드릴 수 있습니다."
+                )
+            elif region == "seoul":
+                message = (
+                    f"주소 '{address}'를 찾을 수 없습니다. 주소를 확인해주세요.\n\n"
+                    "서울 지역의 경우 실시간 주차 가능 대수 정보를 제공할 수 있습니다."
+                )
+            elif region == "gyeonggi":
+                message = (
+                    f"주소 '{address}'를 찾을 수 없습니다. 주소를 확인해주세요.\n\n"
+                    "경기 지역의 경우 요금 및 운영시간 정보를 제공할 수 있습니다. "
+                    "실시간 주차 가능 대수는 제공되지 않습니다."
+                )
+            else:
+                message = (
+                    f"주소 '{address}'를 찾을 수 없습니다. 주소를 확인해주세요.\n\n"
+                    "더 구체적인 주소를 입력하시면 근처 주차장을 찾아드릴 수 있습니다."
+                )
+            
             return {
                 "success": False,
-                "error": f"주소 '{address}'를 찾을 수 없습니다. 주소를 확인해주세요.",
+                "error": message,
                 "parkings": [],
                 "count": 0
             }
