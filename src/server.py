@@ -2,7 +2,7 @@
 주차장 정보 조회 MCP 서버
 """
 
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from fastmcp import FastMCP
 
 from src.api_clients import (
@@ -264,40 +264,105 @@ def _parse_kakao_parking_response(kakao_data: Dict[str, Any]) -> List[Dict[str, 
     return parking_list
 
 
+def _address_to_coordinates(address: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    주소를 좌표로 변환
+    
+    Args:
+        address: 검색할 주소
+    
+    Returns:
+        (위도, 경도) 튜플, 실패 시 (None, None)
+    """
+    try:
+        kakao_client = KakaoLocalClient()
+        response = kakao_client.address_to_coordinates(address)
+        
+        if response.get("status") == "success":
+            data = response.get("data", {})
+            documents = data.get("documents", [])
+            
+            if documents:
+                first_result = documents[0]
+                latitude = float(first_result.get("y", 0))
+                longitude = float(first_result.get("x", 0))
+                return latitude, longitude
+    except Exception:
+        pass
+    
+    return None, None
+
+
 @app.tool()
 def search_nearby_parking(
-    latitude: float,
-    longitude: float,
+    address: Optional[str] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
     radius: float = 1000.0
 ) -> dict:
     """
     주변 주차장을 검색합니다.
     
+    주소 또는 좌표(위도, 경도) 중 하나를 제공해야 합니다.
+    주소가 제공되면 자동으로 좌표로 변환합니다.
+    
     Args:
-        latitude: 위도
-        longitude: 경도
+        address: 검색할 주소 (예: "서울시 중구 세종대로 110")
+        latitude: 위도 (주소가 없을 때 필수)
+        longitude: 경도 (주소가 없을 때 필수)
         radius: 검색 반경 (미터 단위, 기본값: 1000)
     
     Returns:
         주변 주차장 목록
     """
+    # 주소 또는 좌표 중 하나는 필수
+    if not address and (latitude is None or longitude is None):
+        return {
+            "success": False,
+            "error": "주소 또는 좌표(위도, 경도)를 제공해주세요.",
+            "parkings": [],
+            "count": 0
+        }
+    
+    # 주소가 제공되면 좌표로 변환
+    if address:
+        lat, lng = _address_to_coordinates(address)
+        if lat is None or lng is None:
+            return {
+                "success": False,
+                "error": f"주소 '{address}'를 찾을 수 없습니다. 주소를 확인해주세요.",
+                "parkings": [],
+                "count": 0
+            }
+        latitude = lat
+        longitude = lng
+    else:
+        latitude = float(latitude)
+        longitude = float(longitude)
+    
     # 입력값 검증
     if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
         return {
+            "success": False,
             "error": "유효하지 않은 위치 정보입니다. 확인 후 다시 시도해주세요.",
-            "parkings": []
+            "parkings": [],
+            "count": 0
         }
     
     if not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
         return {
+            "success": False,
             "error": "유효하지 않은 위치 정보입니다. 확인 후 다시 시도해주세요.",
-            "parkings": []
+            "parkings": [],
+            "count": 0
         }
     
     if radius <= 0:
         return {
-            "error": "유효하지 않은 위치 정보입니다. 확인 후 다시 시도해주세요.",
-            "parkings": []
+            "success": False,
+            "error": "검색 반경은 0보다 커야 합니다.",
+            "parkings": [],
+            "count": 0
         }
     
     # 카카오 API로 주차장 검색
@@ -313,24 +378,32 @@ def search_nearby_parking(
         # API 키 없음
         if "설정되지 않았습니다" in str(e) or "유효하지 않습니다" in str(e):
             return {
+                "success": False,
                 "error": "주차장 정보 제공 서비스가 준비 중입니다.",
-                "parkings": []
+                "parkings": [],
+                "count": 0
             }
         return {
+            "success": False,
             "error": "주차장 정보를 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-            "parkings": []
+            "parkings": [],
+            "count": 0
         }
     except Exception:
         return {
+            "success": False,
             "error": "주차장 정보를 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-            "parkings": []
+            "parkings": [],
+            "count": 0
         }
     
     # 응답 파싱
     if response.get("status") != "success":
         return {
+            "success": False,
             "error": "주차장 정보를 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-            "parkings": []
+            "parkings": [],
+            "count": 0
         }
     
     # 카카오 API 응답 파싱
@@ -340,8 +413,10 @@ def search_nearby_parking(
     # 결과가 없는 경우
     if not parking_list:
         return {
-            "error": "주변에서 주차장을 찾을 수 없습니다. 검색 범위를 넓혀보세요.",
-            "parkings": []
+            "success": True,
+            "message": "주변에서 주차장을 찾을 수 없습니다. 검색 범위를 넓혀보세요.",
+            "parkings": [],
+            "count": 0
         }
     
     # 각 주차장에 대해 실시간 정보 추가
@@ -383,6 +458,7 @@ def search_nearby_parking(
     
     # 응답 구성
     response = {
+        "success": True,
         "parkings": formatted_parkings,
         "count": len(formatted_parkings)
     }
@@ -399,30 +475,33 @@ def search_nearby_parking(
 
 @app.tool()
 def get_parking_info(
-    parking_id: str
+    parking_name: str,
+    address: Optional[str] = None
 ) -> dict:
     """
     특정 주차장의 상세 정보를 조회합니다.
     
     Args:
-        parking_id: 주차장 ID
+        parking_name: 주차장 이름 (예: "시청 공영주차장")
+        address: 주차장 주소 (선택사항, 정확한 검색을 위해 권장)
     
     Returns:
         주차장 상세 정보
     """
     # 입력값 검증
-    if not parking_id or not isinstance(parking_id, str) or not parking_id.strip():
+    if not parking_name or not isinstance(parking_name, str) or not parking_name.strip():
         return {
-            "error": "유효하지 않은 주차장 정보입니다. 확인 후 다시 시도해주세요."
+            "success": False,
+            "error": "주차장 이름을 입력해주세요."
         }
     
-    # 카카오 API로 주차장 검색 (장소 ID로 검색)
+    # 카카오 API로 주차장 검색
     try:
         kakao_client = KakaoLocalClient()
-        # 카카오 API는 장소 ID로 검색하는 기능이 제한적이므로
-        # 주차장 이름으로 검색 시도
+        # 주소가 제공되면 주소로 검색, 없으면 이름으로 검색
+        query = address if address else parking_name
         response = kakao_client.search_place(
-            query=parking_id,
+            query=query,
             category_group_code="PK6",  # 주차장 카테고리
             size=10
         )
@@ -430,19 +509,23 @@ def get_parking_info(
         # API 키 없음
         if "설정되지 않았습니다" in str(e) or "유효하지 않습니다" in str(e):
             return {
+                "success": False,
                 "error": "주차장 정보 제공 서비스가 준비 중입니다."
             }
         return {
+            "success": False,
             "error": "주차장 정보를 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
         }
     except Exception:
         return {
+            "success": False,
             "error": "주차장 정보를 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
         }
     
     # 응답 파싱
     if response.get("status") != "success":
         return {
+            "success": False,
             "error": "주차장 정보를 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
         }
     
@@ -450,18 +533,31 @@ def get_parking_info(
     kakao_data = response.get("data", {})
     parking_list = _parse_kakao_parking_response(kakao_data)
     
-    # 해당 ID와 일치하는 주차장 찾기 (이름이나 주소로 매칭)
+    # 주차장 이름과 주소로 매칭
     parking = None
     for p in parking_list:
-        if (parking_id in p.get("name", "") or 
-            parking_id in p.get("address", "") or
-            parking_id in p.get("road_address", "")):
+        name_match = parking_name in p.get("name", "") or p.get("name", "") in parking_name
+        addr_match = False
+        if address:
+            addr_match = (
+                address in p.get("address", "") or 
+                address in p.get("road_address", "") or
+                p.get("address", "") in address or
+                p.get("road_address", "") in address
+            )
+        
+        if name_match or (address and addr_match):
             parking = p
             break
     
+    # 정확히 일치하는 것이 없으면 첫 번째 결과 사용
+    if not parking and parking_list:
+        parking = parking_list[0]
+    
     if not parking:
         return {
-            "error": "요청하신 주차장 정보를 찾을 수 없습니다."
+            "success": False,
+            "error": f"'{parking_name}' 주차장 정보를 찾을 수 없습니다."
         }
     
     # 지역 구분 및 실시간 정보 추가
@@ -491,6 +587,7 @@ def get_parking_info(
     }
     
     formatted_parking = _format_parking_info(standard_parking, region, realtime_info)
+    formatted_parking["success"] = True
     
     return formatted_parking
 
