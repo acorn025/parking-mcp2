@@ -619,6 +619,19 @@ def get_parking_info(
     
     return formatted_parking
 
+@app.tool()
+def mcp_health_check(address: str) -> dict:
+    """
+    MCP Tool 호출 정상 여부를 확인하는 테스트용 Tool
+    """
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": f"MCP Tool 호출이 정상적으로 동작했습니다. 입력 주소: {address}"
+            }
+        ]
+    }
 
 def main():
     """MCP 서버 실행 함수 (entry point용)"""
